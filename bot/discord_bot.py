@@ -125,6 +125,11 @@ async def on_message(message: discord.Message):
             mention_author=True,
         )
         return
+    
+    if raw_text.strip().lower() == "does ivy zhang suck?":
+        await message.reply("Yes, she does.", mention_author=True)
+        return
+    
 
     closable = await db.list_open_tasks(message.guild.id)
     open_tasks_for_prompt = [
