@@ -448,7 +448,14 @@ async def before_reminder_loop():
 # ---------------------------------------------------------------------------
 # Slash commands
 # ---------------------------------------------------------------------------
+SERVEBOT_VERSION = "1.05"  # bumped manually, not derived from anything
+
 servebot_group = app_commands.Group(name="servebot", description="ServeBot task management")
+
+
+@servebot_group.command(name="version", description="Show the running ServeBot version")
+async def version_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message(f"ServeBot v{SERVEBOT_VERSION}", ephemeral=True)
 
 
 @servebot_group.command(name="help", description="Show how to use ServeBot")
