@@ -453,7 +453,7 @@ async def before_reminder_loop():
 # ---------------------------------------------------------------------------
 # Slash commands
 # ---------------------------------------------------------------------------
-SERVEBOT_VERSION = "1.05"  # bumped manually, not derived from anything
+SERVEBOT_VERSION = "1.06"  # bumped manually, not derived from anything
 
 servebot_group = app_commands.Group(name="servebot", description="ServeBot task management")
 
@@ -583,7 +583,7 @@ async def list_tasks(interaction: discord.Interaction):
         return mentions
 
     lines = [
-        f"#{t['id']} — {_mentions(t)}: {t['description']} — due <t:{int(t['due_at'].timestamp())}:R>"
+        f"{_mentions(t)}: {t['description']} — due <t:{int(t['due_at'].timestamp())}:R>"
         for t in open_tasks
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
