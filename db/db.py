@@ -107,6 +107,7 @@ class NewTask:
     description: str
     due_at: dt.datetime
     offsets_minutes: List[int]
+    assignee_id_2: Optional[int] = None
 
 
 async def create_task_with_reminders(task: NewTask) -> int:
@@ -116,8 +117,8 @@ async def create_task_with_reminders(task: NewTask) -> int:
         async with conn.transaction():
             task_id = await conn.fetchval(
                 """
-                INSERT INTO tasks (guild_id, channel_id, created_by, assignee_id, description, due_at)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                INSERT INTO tasks (guild_id, channel_id, created_by, assignee_id, description, due_at, assignee_id_2)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 RETURNING id
                 """,
                 task.guild_id,
@@ -126,6 +127,7 @@ async def create_task_with_reminders(task: NewTask) -> int:
                 task.assignee_id,
                 task.description,
                 task.due_at,
+                task.assignee_id_2,
             )
             for minutes_before in task.offsets_minutes:
                 remind_at = task.due_at - dt.timedelta(minutes=minutes_before)
@@ -152,6 +154,7 @@ class DueReminder:
     description: str
     due_at: dt.datetime
     label: Optional[str]
+    assignee_id_2: Optional[int] = None
 
 
 async def get_due_reminders(now: Optional[dt.datetime] = None) -> List[DueReminder]:
@@ -160,7 +163,7 @@ async def get_due_reminders(now: Optional[dt.datetime] = None) -> List[DueRemind
     rows = await pool.fetch(
         """
         SELECT r.id AS reminder_id, r.task_id, r.label,
-               t.guild_id, t.channel_id, t.assignee_id, t.description, t.due_at
+               t.guild_id, t.channel_id, t.assignee_id, t.assignee_id_2, t.description, t.due_at
         FROM reminders r
         JOIN tasks t ON t.id = r.task_id
         WHERE r.remind_at <= $1 AND r.sent = false AND t.status = 'pending'
@@ -175,6 +178,7 @@ async def get_due_reminders(now: Optional[dt.datetime] = None) -> List[DueRemind
             guild_id=row["guild_id"],
             channel_id=row["channel_id"],
             assignee_id=row["assignee_id"],
+            assignee_id_2=row["assignee_id_2"],
             description=row["description"],
             due_at=row["due_at"],
             label=row["label"],
@@ -241,6 +245,7 @@ async def update_task(
     description: Optional[str] = None,
     due_at: Optional[dt.datetime] = None,
     assignee_id: Optional[int] = None,
+    assignee_id_2: Optional[int] = None,
 ) -> bool:
     """Update only the given (non-None) fields on a pending task."""
     pool = _get_pool()
@@ -249,7 +254,8 @@ async def update_task(
         UPDATE tasks SET
             description = COALESCE($3, description),
             due_at = COALESCE($4, due_at),
-            assignee_id = COALESCE($5, assignee_id)
+            assignee_id = COALESCE($5, assignee_id),
+            assignee_id_2 = COALESCE($6, assignee_id_2)
         WHERE id = $1 AND guild_id = $2 AND status = 'pending'
         """,
         task_id,
@@ -257,6 +263,7 @@ async def update_task(
         description,
         due_at,
         assignee_id,
+        assignee_id_2,
     )
     return result.endswith("1")
 

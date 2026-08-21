@@ -7,6 +7,12 @@ Design choices worth flagging (see plan §12 open questions):
 - Ambiguous/unresolved assignees do NOT block the whole batch — that task
   is flagged in the confirmation embed and skipped on commit, the rest
   go through. This answers open question #1 in favor of "partial commit."
+- A task always needs one (primary) assignee, but may optionally be
+  co-assigned to a second person. An unresolved 2nd assignee on a *new*
+  task does NOT block that task (it's just created with one assignee,
+  flagged in the embed) — but an *edit* that explicitly asks to add/change
+  a 2nd assignee and fails to resolve is skipped entirely, per the
+  all-or-nothing edit rule below.
 - Only the member who sent the original message can confirm/reject their
   own pending batch, to avoid someone else accidentally confirming a batch
   they didn't review.
@@ -126,6 +132,9 @@ async def on_message(message: discord.Message):
             "id": t["id"],
             "description": t["description"],
             "assignee_display": _member_display_name(message.guild, t["assignee_id"]),
+            "assignee_2_display": (
+                _member_display_name(message.guild, t["assignee_id_2"]) if t["assignee_id_2"] else None
+            ),
             "due_at": t["due_at"].isoformat(),
         }
         for t in closable
@@ -206,6 +215,15 @@ def _build_confirmation_embed(
         else:
             who = task.assignee_display or task.raw.assignee_mention
 
+        if task.raw.assignee_2_mention:
+            if task.assignee_id_2 is not None:
+                who += f", {task.assignee_2_display or task.raw.assignee_2_mention}"
+            else:
+                unresolved_2 = f"\"{task.raw.assignee_2_mention}\" not found"
+                if task.ambiguous_assignee_2_candidates:
+                    unresolved_2 = f"matched: {', '.join(task.ambiguous_assignee_2_candidates)}"
+                who += f" (2nd assignee unresolved — {unresolved_2})"
+
         if task.due_at is None:
             when = "no due time recognized"
         else:
@@ -230,7 +248,7 @@ def _build_confirmation_embed(
         embed.add_field(
             name=f"{i}. {task.raw.description}{flag}",
             value=(
-                f"**Assignee:** {who}\n**Due:** {when}\n"
+                f"**Assignee(s):** {who}\n**Due:** {when}\n"
                 f"**Channel:** {channel_line}\n**Reminder:** {reminder_line}"
             ),
             inline=False,
@@ -264,6 +282,14 @@ def _build_confirmation_embed(
                 if edit.ambiguous_assignee_candidates:
                     who += f" (matched: {', '.join(edit.ambiguous_assignee_candidates)})"
                 changes.append(f"assignee → {who}")
+        if edit.assignee_2_change_requested:
+            if edit.new_assignee_id_2 is not None:
+                changes.append(f"2nd assignee → {edit.new_assignee_2_display}")
+            else:
+                who_2 = "unresolved 2nd assignee"
+                if edit.ambiguous_assignee_2_candidates:
+                    who_2 += f" (matched: {', '.join(edit.ambiguous_assignee_2_candidates)})"
+                changes.append(f"2nd assignee → {who_2}")
         if edit.new_reminder_offset_minutes is not None:
             changes.append(f"reminder → {edit.new_reminder_offset_minutes} min before due")
         flag = "" if edit.is_valid else " — will be skipped"
@@ -336,6 +362,7 @@ async def _commit_batch(batch: PendingBatch) -> tuple[int, int, int, int]:
             description=task.raw.description,
             due_at=task.due_at,
             offsets_minutes=offsets,
+            assignee_id_2=task.assignee_id_2,
         )
         await db.create_task_with_reminders(new_task)
         committed += 1
@@ -356,6 +383,7 @@ async def _commit_batch(batch: PendingBatch) -> tuple[int, int, int, int]:
             description=edit.new_description,
             due_at=edit.new_due_at,
             assignee_id=edit.new_assignee_id,
+            assignee_id_2=edit.new_assignee_id_2,
         )
         if not ok:
             skipped += 1
@@ -394,11 +422,14 @@ async def reminder_loop():
             await db.mark_reminder_sent(reminder.reminder_id)
             continue
         due_ts = int(reminder.due_at.timestamp())
+        mentions = f"<@{reminder.assignee_id}>"
+        if reminder.assignee_id_2:
+            mentions += f" <@{reminder.assignee_id_2}>"
         if reminder.label == "at_due":
-            text = f"<@{reminder.assignee_id}> **due now:** {reminder.description}"
+            text = f"{mentions} **due now:** {reminder.description}"
         else:
             text = (
-                f"<@{reminder.assignee_id}> reminder: {reminder.description} — "
+                f"{mentions} reminder: {reminder.description} — "
                 f"due <t:{due_ts}:F> (<t:{due_ts}:R>)"
             )
         try:
@@ -432,8 +463,10 @@ async def help_cmd(interaction: discord.Interaction):
         value=(
             "@ServeBot alice needs to finalize the slides by friday at 3pm, bob has to "
             "send the invoices by end of day tomorrow\n\n"
-            "List several tasks in one message. Want a different reminder timing or a "
-            "specific channel? Just say so:\n"
+            "List several tasks in one message. A task can be co-assigned to up to 2 "
+            "people:\n"
+            "@ServeBot alice and bob need to review the deck by friday\n\n"
+            "Want a different reminder timing or a specific channel? Just say so:\n"
             "@ServeBot carol should review PR 42 by monday, remind her a day ahead\n"
             "@ServeBot alice needs the slides by friday 3pm, post this in #updates"
         ),
@@ -531,8 +564,14 @@ async def list_tasks(interaction: discord.Interaction):
     if not open_tasks:
         await interaction.response.send_message("No open tasks in this channel.", ephemeral=True)
         return
+    def _mentions(t: dict) -> str:
+        mentions = f"<@{t['assignee_id']}>"
+        if t.get("assignee_id_2"):
+            mentions += f" <@{t['assignee_id_2']}>"
+        return mentions
+
     lines = [
-        f"#{t['id']} — <@{t['assignee_id']}>: {t['description']} — due <t:{int(t['due_at'].timestamp())}:R>"
+        f"#{t['id']} — {_mentions(t)}: {t['description']} — due <t:{int(t['due_at'].timestamp())}:R>"
         for t in open_tasks
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)

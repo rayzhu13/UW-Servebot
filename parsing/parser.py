@@ -44,7 +44,8 @@ def _client_instance() -> Anthropic:
 SYSTEM_PROMPT_TEMPLATE = """You process a message sent to ServeBot, a Discord task-reminder bot. \
 The message may describe new tasks to create, may say that one or more already-open tasks are \
 finished, may ask to change something about one or more already-open tasks, or any combination \
-of these. Any server member may create, close, or edit tasks.
+of these. Any server member may create, close, or edit tasks. A task normally has one assignee, \
+but may optionally be co-assigned to a second person (never more than two).
 
 For reference, the message was sent at: {reference_iso} ({reference_weekday}), timezone {timezone_name}. \
 Resolve all relative dates ("tomorrow", "friday", "next monday", "end of day") against that moment. \
@@ -62,6 +63,10 @@ Return ONLY a JSON object, no prose, no markdown code fences, with exactly these
 these keys:
   - "assignee_mention": string. The name/handle the message used to refer to the person \
 (e.g. "alice", "bob"). Lowercase, no @ symbol.
+  - "assignee_2_mention": string or null. If the message explicitly co-assigns THIS task to a \
+second person too (e.g. "alice and bob need to finalize the slides"), that second person's \
+name/handle, lowercase, no @ symbol. Only set this for genuine co-assignment of the same task \
+to two people — never for a second, separate task. Use null if only one person is assigned.
   - "description": string. A short, clear restatement of the task (imperative form, \
 e.g. "Finalize slides"). Do not include the due date/time in this field.
   - "due_at_raw": string. The exact phrase from the message describing when it's due \
@@ -100,6 +105,8 @@ date/time; otherwise null.
 per the date rules above; null if new_due_at_raw is null.
   - "new_assignee_mention": string or null. Lowercase, no @ symbol; only if the message asks \
 to reassign the task to someone else; otherwise null.
+  - "new_assignee_2_mention": string or null. Lowercase, no @ symbol; only if the message asks \
+to add or change a second, co-assigned person on this task; otherwise null.
   - "new_reminder_offset_minutes": integer or null. Only if the message explicitly asks to \
 change the reminder timing for this task; otherwise null.
   Only include an edit for a task if the message clearly asks to change something about it — \
@@ -120,6 +127,7 @@ class RawExtractedTask:
     due_at_iso: str = ""
     reminder_offset_minutes: Optional[int] = None
     channel_mention: Optional[str] = None
+    assignee_2_mention: Optional[str] = None
 
 
 @dataclass
@@ -130,6 +138,7 @@ class RawExtractedEdit:
     new_due_at_iso: Optional[str] = None
     new_assignee_mention: Optional[str] = None
     new_reminder_offset_minutes: Optional[int] = None
+    new_assignee_2_mention: Optional[str] = None
 
 
 @dataclass
@@ -156,11 +165,21 @@ def extract_message(
     Also given the caller's currently-open tasks (id, description, assignee,
     due date) so it can report which of those the message says are done —
     one call covers both new-task extraction and completion detection.
-    `open_tasks` items need "id", "description", "assignee_display", "due_at".
+    `open_tasks` items need "id", "description", "assignee_display", "due_at", and
+    optionally "assignee_2_display" if the task has a second assignee.
     """
     client = _client_instance()
     open_tasks_listing = "\n".join(
-        f'- id={t["id"]}: "{t["description"]}" (assigned to {t["assignee_display"]}, due {t["due_at"]})'
+        '- id={id}: "{description}" (assigned to {assignees}, due {due_at})'.format(
+            id=t["id"],
+            description=t["description"],
+            assignees=(
+                f'{t["assignee_display"]} and {t["assignee_2_display"]}'
+                if t.get("assignee_2_display")
+                else t["assignee_display"]
+            ),
+            due_at=t["due_at"],
+        )
         for t in open_tasks
     ) or "(none)"
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
@@ -194,6 +213,7 @@ def extract_message(
         try:
             raw_offset = item.get("reminder_offset_minutes")
             channel_mention = item.get("channel_mention")
+            assignee_2_mention = item.get("assignee_2_mention")
             new_tasks.append(
                 RawExtractedTask(
                     assignee_mention=str(item["assignee_mention"]).strip().lower(),
@@ -202,6 +222,7 @@ def extract_message(
                     due_at_iso=str(item.get("due_at_iso", "")).strip(),
                     reminder_offset_minutes=int(raw_offset) if raw_offset is not None else None,
                     channel_mention=str(channel_mention).strip() if channel_mention else None,
+                    assignee_2_mention=str(assignee_2_mention).strip().lower() if assignee_2_mention else None,
                 )
             )
         except (KeyError, TypeError, ValueError) as e:
@@ -217,6 +238,7 @@ def extract_message(
         try:
             raw_reminder = item.get("new_reminder_offset_minutes")
             new_assignee_mention = item.get("new_assignee_mention")
+            new_assignee_2_mention = item.get("new_assignee_2_mention")
             edits.append(
                 RawExtractedEdit(
                     task_id=int(item["task_id"]),
@@ -227,6 +249,8 @@ def extract_message(
                     new_assignee_mention=str(new_assignee_mention).strip().lower()
                     if new_assignee_mention else None,
                     new_reminder_offset_minutes=int(raw_reminder) if raw_reminder is not None else None,
+                    new_assignee_2_mention=str(new_assignee_2_mention).strip().lower()
+                    if new_assignee_2_mention else None,
                 )
             )
         except (KeyError, TypeError, ValueError) as e:
@@ -243,6 +267,9 @@ class ResolvedTask:
     due_at: Optional[dt.datetime]        # None => could not parse a due time
     channel_id: Optional[int] = None     # None => no channel mentioned, or mentioned but not found
     ambiguous_assignee_candidates: List[str] = field(default_factory=list)
+    assignee_id_2: Optional[int] = None            # optional 2nd assignee; None => not given, or unresolved
+    assignee_2_display: Optional[str] = None
+    ambiguous_assignee_2_candidates: List[str] = field(default_factory=list)
 
 
 def resolve_assignee(mention: str, members: List) -> tuple[Optional[int], Optional[str], List[str]]:
@@ -369,6 +396,10 @@ class ResolvedEdit:
     assignee_change_requested: bool
     new_reminder_offset_minutes: Optional[int]
     ambiguous_assignee_candidates: List[str] = field(default_factory=list)
+    new_assignee_id_2: Optional[int] = None
+    new_assignee_2_display: Optional[str] = None
+    assignee_2_change_requested: bool = False
+    ambiguous_assignee_2_candidates: List[str] = field(default_factory=list)
 
     @property
     def is_valid(self) -> bool:
@@ -379,10 +410,13 @@ class ResolvedEdit:
             return False
         if self.assignee_change_requested and self.new_assignee_id is None:
             return False
+        if self.assignee_2_change_requested and self.new_assignee_id_2 is None:
+            return False
         return bool(
             self.new_description
             or self.due_change_requested
             or self.assignee_change_requested
+            or self.assignee_2_change_requested
             or self.new_reminder_offset_minutes is not None
         )
 
@@ -422,6 +456,15 @@ def parse_and_normalize(
         assignee_id, display_name, ambiguous = resolve_assignee(task.assignee_mention, members)
         due_at = normalize_due_at(task.due_at_raw, task.due_at_iso, reference_time, timezone_name)
         channel_id = resolve_channel(task.channel_mention, channels)
+
+        assignee_id_2 = display_name_2 = None
+        ambiguous_2: List[str] = []
+        if task.assignee_2_mention:
+            assignee_id_2, display_name_2, ambiguous_2 = resolve_assignee(task.assignee_2_mention, members)
+            if assignee_id_2 is not None and assignee_id_2 == assignee_id:
+                # Same person named twice — treat as a single assignee, not an error.
+                assignee_id_2, display_name_2, ambiguous_2 = None, None, []
+
         resolved.append(
             ResolvedTask(
                 raw=task,
@@ -430,6 +473,9 @@ def parse_and_normalize(
                 due_at=due_at,
                 channel_id=channel_id,
                 ambiguous_assignee_candidates=ambiguous,
+                assignee_id_2=assignee_id_2,
+                assignee_2_display=display_name_2,
+                ambiguous_assignee_2_candidates=ambiguous_2,
             )
         )
 
@@ -453,6 +499,15 @@ def parse_and_normalize(
             new_assignee_id, new_assignee_display, ambiguous = resolve_assignee(
                 edit.new_assignee_mention, members
             )
+
+        assignee_2_change_requested = bool(edit.new_assignee_2_mention)
+        new_assignee_id_2 = new_assignee_2_display = None
+        ambiguous_2 = []
+        if assignee_2_change_requested:
+            new_assignee_id_2, new_assignee_2_display, ambiguous_2 = resolve_assignee(
+                edit.new_assignee_2_mention, members
+            )
+
         resolved_edits.append(
             ResolvedEdit(
                 task_id=edit.task_id,
@@ -464,6 +519,10 @@ def parse_and_normalize(
                 assignee_change_requested=assignee_change_requested,
                 new_reminder_offset_minutes=edit.new_reminder_offset_minutes,
                 ambiguous_assignee_candidates=ambiguous,
+                new_assignee_id_2=new_assignee_id_2,
+                new_assignee_2_display=new_assignee_2_display,
+                assignee_2_change_requested=assignee_2_change_requested,
+                ambiguous_assignee_2_candidates=ambiguous_2,
             )
         )
 

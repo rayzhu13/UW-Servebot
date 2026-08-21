@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- A task can optionally be co-assigned to a second person (up to 2 total);
+-- assignee_id remains the required primary assignee.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id_2 BIGINT;
+
 CREATE TABLE IF NOT EXISTS reminders (
     id SERIAL PRIMARY KEY,
     task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
