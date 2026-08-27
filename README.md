@@ -24,10 +24,12 @@ file is setup and implementation notes.
       30 minutes before due out of the box).
 - [x] Channel-ping delivery (§7). Per-task channel routing, in priority
       order: (1) a channel mentioned in the message itself for that task
-      (e.g. "post this in #updates"), (2) the guild's configured override
-      (`/servebot set-reminder-channel`), (3) the channel the task was
-      created in. The confirmation embed shows which channel and exact
-      reminder time each task will use before you commit.
+      (e.g. "post this in #updates"), (2) a per-origin-channel override
+      configured for the channel the task was created in
+      (`/servebot set-reminder-channel`, run in that origin channel),
+      (3) the channel the task was created in. The confirmation embed shows
+      which channel and exact reminder time each task will use before you
+      commit.
 - [x] Postgres polling scheduler (§8, MVP approach)
 - [x] Self-service task completion: `@mention` the bot saying a task is done
       and it'll mark it `status = 'done'` (kept, not deleted) after the usual

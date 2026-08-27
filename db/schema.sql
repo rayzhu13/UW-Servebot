@@ -4,13 +4,11 @@
 CREATE TABLE IF NOT EXISTS guild_settings (
     guild_id BIGINT PRIMARY KEY,
     default_reminder_minutes INTEGER NOT NULL DEFAULT 30,  -- used when a task doesn't specify its own reminder time
-    timezone_name TEXT NOT NULL DEFAULT 'America/Toronto',  -- IANA name
-    reminder_channel_id BIGINT                      -- NULL => use the channel the task was created in
+    timezone_name TEXT NOT NULL DEFAULT 'America/Toronto'  -- IANA name
 );
 
 -- Safe to re-run on an existing database: adds the column if it's missing.
 ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS timezone_name TEXT NOT NULL DEFAULT 'America/Toronto';
-ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS reminder_channel_id BIGINT;
 -- Task creation/closing opened up to any server member — admin_role_id is no longer read anywhere.
 ALTER TABLE guild_settings DROP COLUMN IF EXISTS admin_role_id;
 -- Replaced the arbitrary default_offsets_minutes[] list with a single default
@@ -18,6 +16,20 @@ ALTER TABLE guild_settings DROP COLUMN IF EXISTS admin_role_id;
 -- a due-time notification (see bot/discord_bot.py::_commit_batch).
 ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS default_reminder_minutes INTEGER NOT NULL DEFAULT 30;
 ALTER TABLE guild_settings DROP COLUMN IF EXISTS default_offsets_minutes;
+-- Reminder-channel redirect moved from a single guild-wide setting to a
+-- per-origin-channel table (channel_settings, below) — see that table's comment.
+ALTER TABLE guild_settings DROP COLUMN IF EXISTS reminder_channel_id;
+
+-- Per-origin-channel reminder redirect: a row here means "tasks created in
+-- (guild_id, channel_id) should post reminders in reminder_channel_id
+-- instead". No row = no override = task posts reminders in its own origin
+-- channel. Clearing an override deletes the row rather than storing NULL.
+CREATE TABLE IF NOT EXISTS channel_settings (
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    reminder_channel_id BIGINT NOT NULL,
+    PRIMARY KEY (guild_id, channel_id)
+);
 
 CREATE TABLE IF NOT EXISTS tasks (
     id SERIAL PRIMARY KEY,

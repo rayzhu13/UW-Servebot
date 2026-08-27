@@ -146,6 +146,7 @@ async def on_message(message: discord.Message):
     ]
 
     settings = await db.get_guild_settings(message.guild.id)
+    channel_override = await db.get_reminder_channel_override(message.guild.id, message.channel.id)
 
     async with message.channel.typing():
         try:
@@ -175,7 +176,8 @@ async def on_message(message: discord.Message):
 
     closable_by_id = {t["id"]: t for t in closable}
     embed = _build_confirmation_embed(
-        result.new_tasks, result.close_task_ids, result.edits, closable_by_id, settings, message.channel.id
+        result.new_tasks, result.close_task_ids, result.edits, closable_by_id,
+        settings, channel_override, message.channel.id
     )
     confirmation_msg = await message.reply(embed=embed, mention_author=True)
     await confirmation_msg.add_reaction(CONFIRM_EMOJI)
@@ -197,6 +199,7 @@ def _build_confirmation_embed(
     edits: List[ResolvedEdit],
     closable_by_id: Dict[int, dict],
     settings: db.GuildSettings,
+    channel_override: Optional[int],
     origin_channel_id: int,
 ) -> discord.Embed:
     if close_task_ids:
@@ -234,7 +237,7 @@ def _build_confirmation_embed(
         else:
             when = f"<t:{int(task.due_at.timestamp())}:F> (<t:{int(task.due_at.timestamp())}:R>)"
 
-        effective_channel_id = task.channel_id or settings.reminder_channel_id or origin_channel_id
+        effective_channel_id = task.channel_id or channel_override or origin_channel_id
         channel_line = f"<#{effective_channel_id}>"
         if task.raw.channel_mention and task.channel_id is None:
             channel_line += f' ("{task.raw.channel_mention}" not found, using this instead)'
@@ -348,13 +351,14 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
 async def _commit_batch(batch: PendingBatch) -> tuple[int, int, int, int]:
     settings = await db.get_guild_settings(batch.guild_id)
+    channel_override = await db.get_reminder_channel_override(batch.guild_id, batch.channel_id)
     committed = 0
     skipped = 0
     for task in batch.resolved_tasks:
         if task.assignee_id is None or task.due_at is None:
             skipped += 1
             continue
-        channel_id = task.channel_id or settings.reminder_channel_id or batch.channel_id
+        channel_id = task.channel_id or channel_override or batch.channel_id
         reminder_minutes = task.raw.reminder_offset_minutes
         if reminder_minutes is None:
             reminder_minutes = settings.default_reminder_minutes
@@ -453,7 +457,7 @@ async def before_reminder_loop():
 # ---------------------------------------------------------------------------
 # Slash commands
 # ---------------------------------------------------------------------------
-SERVEBOT_VERSION = "1.06"  # bumped manually, not derived from anything
+SERVEBOT_VERSION = "1.07"  # bumped manually, not derived from anything
 
 servebot_group = app_commands.Group(name="servebot", description="ServeBot task management")
 
@@ -525,16 +529,27 @@ async def help_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@servebot_group.command(name="set-reminder-channel", description="Set the channel reminders are posted to (omit channel to clear and use each task's origin channel)")
+@servebot_group.command(
+    name="set-reminder-channel",
+    description=(
+        "Set the channel reminders for tasks created in THIS channel are posted to "
+        "(omit channel to clear the override and use this channel itself)"
+    ),
+)
 @app_commands.checks.has_permissions(manage_guild=True)
 async def set_reminder_channel(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None):
-    await db.set_reminder_channel(interaction.guild_id, channel.id if channel else None)
+    await db.set_reminder_channel_override(
+        interaction.guild_id, interaction.channel_id, channel.id if channel else None
+    )
     if channel is not None:
-        await interaction.response.send_message(f"Reminder channel set to {channel.mention}.", ephemeral=True)
+        await interaction.response.send_message(
+            f"Tasks created in this channel will now post reminders in {channel.mention}.",
+            ephemeral=True,
+        )
     else:
         await interaction.response.send_message(
-            "Reminder channel override cleared — new tasks will post reminders in the "
-            "channel they were created in.",
+            "Reminder channel override cleared for this channel — tasks created here "
+            "will post reminders in this channel.",
             ephemeral=True,
         )
 

@@ -36,13 +36,12 @@ class GuildSettings:
     guild_id: int
     default_reminder_minutes: int
     timezone_name: str
-    reminder_channel_id: Optional[int]
 
 
 async def get_guild_settings(guild_id: int) -> GuildSettings:
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT guild_id, default_reminder_minutes, timezone_name, reminder_channel_id "
+        "SELECT guild_id, default_reminder_minutes, timezone_name "
         "FROM guild_settings WHERE guild_id = $1",
         guild_id,
     )
@@ -51,12 +50,12 @@ async def get_guild_settings(guild_id: int) -> GuildSettings:
         row = await pool.fetchrow(
             "INSERT INTO guild_settings (guild_id) VALUES ($1) "
             "ON CONFLICT (guild_id) DO NOTHING "
-            "RETURNING guild_id, default_reminder_minutes, timezone_name, reminder_channel_id",
+            "RETURNING guild_id, default_reminder_minutes, timezone_name",
             guild_id,
         )
         if row is None:
             row = await pool.fetchrow(
-                "SELECT guild_id, default_reminder_minutes, timezone_name, reminder_channel_id "
+                "SELECT guild_id, default_reminder_minutes, timezone_name "
                 "FROM guild_settings WHERE guild_id = $1",
                 guild_id,
             )
@@ -64,18 +63,38 @@ async def get_guild_settings(guild_id: int) -> GuildSettings:
         guild_id=row["guild_id"],
         default_reminder_minutes=row["default_reminder_minutes"],
         timezone_name=row["timezone_name"],
-        reminder_channel_id=row["reminder_channel_id"],
     )
 
 
-async def set_reminder_channel(guild_id: int, channel_id: Optional[int]) -> None:
+async def get_reminder_channel_override(guild_id: int, origin_channel_id: int) -> Optional[int]:
     pool = _get_pool()
-    await pool.execute(
-        "INSERT INTO guild_settings (guild_id, reminder_channel_id) VALUES ($1, $2) "
-        "ON CONFLICT (guild_id) DO UPDATE SET reminder_channel_id = EXCLUDED.reminder_channel_id",
+    row = await pool.fetchrow(
+        "SELECT reminder_channel_id FROM channel_settings WHERE guild_id = $1 AND channel_id = $2",
         guild_id,
-        channel_id,
+        origin_channel_id,
     )
+    return row["reminder_channel_id"] if row else None
+
+
+async def set_reminder_channel_override(
+    guild_id: int, origin_channel_id: int, target_channel_id: Optional[int]
+) -> None:
+    pool = _get_pool()
+    if target_channel_id is None:
+        await pool.execute(
+            "DELETE FROM channel_settings WHERE guild_id = $1 AND channel_id = $2",
+            guild_id,
+            origin_channel_id,
+        )
+    else:
+        await pool.execute(
+            "INSERT INTO channel_settings (guild_id, channel_id, reminder_channel_id) "
+            "VALUES ($1, $2, $3) "
+            "ON CONFLICT (guild_id, channel_id) DO UPDATE SET reminder_channel_id = EXCLUDED.reminder_channel_id",
+            guild_id,
+            origin_channel_id,
+            target_channel_id,
+        )
 
 
 async def set_default_reminder_minutes(guild_id: int, minutes: int) -> None:

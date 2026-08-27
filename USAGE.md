@@ -34,8 +34,8 @@ naming the channel in the same message:
 > #updates
 
 If the channel you name doesn't exist or can't be matched, ServeBot falls
-back to the server's configured reminder channel (if one is set), then to
-the channel you sent the message in.
+back to this channel's configured reminder override (if one is set for
+the channel you're in), then to the channel you sent the message in.
 
 ## Marking a task done
 
@@ -99,10 +99,11 @@ current channel.
 
 ## Server settings (require Manage Server)
 
-- `/servebot set-reminder-channel [channel]` — send all future task
-  notifications to a specific channel by default, overriding the "channel
-  the task was created in" fallback. Run it with no channel to clear the
-  override.
+- `/servebot set-reminder-channel [channel]` — run this **in the channel
+  tasks will be created in**; it redirects reminders for tasks created in
+  that channel to the given channel instead. Run it with no channel (in the
+  same origin channel) to clear that channel's override. Each channel has
+  its own independent setting.
 - `/servebot set-default-reminder <minutes>` — how many minutes before due
   a task gets reminded if nothing in the message says otherwise (30 by
   default).
