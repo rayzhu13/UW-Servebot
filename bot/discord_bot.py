@@ -125,79 +125,81 @@ async def on_message(message: discord.Message):
             mention_author=True,
         )
         return
-    
+
     if raw_text.strip().lower() == "does ivy zhang suck?":
         await message.reply("Yes, she does.", mention_author=True)
         return
-    
 
-    closable = await db.list_open_tasks(message.guild.id)
-    open_tasks_for_prompt = [
-        {
-            "id": t["id"],
-            "description": t["description"],
-            "assignee_display": _member_display_name(message.guild, t["assignee_id"]),
-            "assignee_2_display": (
-                _member_display_name(message.guild, t["assignee_id_2"]) if t["assignee_id_2"] else None
-            ),
-            "due_at": t["due_at"].isoformat(),
-        }
-        for t in closable
-    ]
+    try:
+        closable = await db.list_open_tasks(message.guild.id)
+        open_tasks_for_prompt = [
+            {
+                "id": t["id"],
+                "description": t["description"],
+                "assignee_display": _member_display_name(message.guild, t["assignee_id"]),
+                "assignee_2_display": (
+                    _member_display_name(message.guild, t["assignee_id_2"]) if t["assignee_id_2"] else None
+                ),
+                "due_at": t["due_at"].isoformat(),
+            }
+            for t in closable
+        ]
 
-    settings = await db.get_guild_settings(message.guild.id)
-    channel_override = await db.get_reminder_channel_override(message.guild.id, message.channel.id)
+        settings = await db.get_guild_settings(message.guild.id)
+        channel_override = await db.get_reminder_channel_override(message.guild.id, message.channel.id)
 
-    async with message.channel.typing():
-        try:
-            result = parse_and_normalize(
-                raw_text,
-                members=message.guild.members,
-                open_tasks=open_tasks_for_prompt,
-                channels=message.guild.text_channels,
-                reference_time=dt.datetime.now(dt.timezone.utc),
-                timezone_name=settings.timezone_name,
-            )
-        except ParseError as e:
-            log.warning("Parse error for guild %s: %s", message.guild.id, e)
+        async with message.channel.typing():
+            try:
+                result = parse_and_normalize(
+                    raw_text,
+                    members=message.guild.members,
+                    open_tasks=open_tasks_for_prompt,
+                    channels=message.guild.text_channels,
+                    reference_time=dt.datetime.now(dt.timezone.utc),
+                    timezone_name=settings.timezone_name,
+                )
+            except ParseError as e:
+                log.warning("Parse error for guild %s: %s", message.guild.id, e)
+                await message.reply(
+                    "I couldn't make sense of that — could you rephrase it? "
+                    "(Who owns what and when it's due, which task is done, or "
+                    "what to change about one.)",
+                    mention_author=True,
+                )
+                return
+
+        if not result.new_tasks and not result.close_task_ids and not result.edits:
             await message.reply(
-                "I couldn't make sense of that — could you rephrase it? "
-                "(Who owns what and when it's due, which task is done, or "
-                "what to change about one.)",
-                mention_author=True,
+                "I didn't find any tasks to create, close, or edit in that message.", mention_author=True
             )
             return
-        except Exception:
-            log.exception("Unexpected error handling message in guild %s", message.guild.id)
+
+        closable_by_id = {t["id"]: t for t in closable}
+        embed = _build_confirmation_embed(
+            result.new_tasks, result.close_task_ids, result.edits, closable_by_id,
+            settings, channel_override, message.channel.id
+        )
+        confirmation_msg = await message.reply(embed=embed, mention_author=True)
+        await confirmation_msg.add_reaction(CONFIRM_EMOJI)
+        await confirmation_msg.add_reaction(REJECT_EMOJI)
+
+        _pending[confirmation_msg.id] = PendingBatch(
+            guild_id=message.guild.id,
+            channel_id=message.channel.id,
+            requested_by=message.author.id,
+            resolved_tasks=result.new_tasks,
+            close_task_ids=result.close_task_ids,
+            edits=result.edits,
+        )
+    except Exception:
+        log.exception("Unexpected error handling message in guild %s", message.guild.id)
+        try:
             await message.reply(
                 "Something went wrong on my end processing that — try again in a moment.",
                 mention_author=True,
             )
-            return
-
-    if not result.new_tasks and not result.close_task_ids and not result.edits:
-        await message.reply(
-            "I didn't find any tasks to create, close, or edit in that message.", mention_author=True
-        )
-        return
-
-    closable_by_id = {t["id"]: t for t in closable}
-    embed = _build_confirmation_embed(
-        result.new_tasks, result.close_task_ids, result.edits, closable_by_id,
-        settings, channel_override, message.channel.id
-    )
-    confirmation_msg = await message.reply(embed=embed, mention_author=True)
-    await confirmation_msg.add_reaction(CONFIRM_EMOJI)
-    await confirmation_msg.add_reaction(REJECT_EMOJI)
-
-    _pending[confirmation_msg.id] = PendingBatch(
-        guild_id=message.guild.id,
-        channel_id=message.channel.id,
-        requested_by=message.author.id,
-        resolved_tasks=result.new_tasks,
-        close_task_ids=result.close_task_ids,
-        edits=result.edits,
-    )
+        except discord.HTTPException:
+            log.exception("Also failed to send the error reply in guild %s", message.guild.id)
 
 
 def _build_confirmation_embed(
