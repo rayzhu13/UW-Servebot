@@ -167,6 +167,13 @@ async def on_message(message: discord.Message):
                 mention_author=True,
             )
             return
+        except Exception:
+            log.exception("Unexpected error handling message in guild %s", message.guild.id)
+            await message.reply(
+                "Something went wrong on my end processing that — try again in a moment.",
+                mention_author=True,
+            )
+            return
 
     if not result.new_tasks and not result.close_task_ids and not result.edits:
         await message.reply(
@@ -457,7 +464,7 @@ async def before_reminder_loop():
 # ---------------------------------------------------------------------------
 # Slash commands
 # ---------------------------------------------------------------------------
-SERVEBOT_VERSION = "1.07"  # bumped manually, not derived from anything
+SERVEBOT_VERSION = "1.08"  # bumped manually, not derived from anything
 
 servebot_group = app_commands.Group(name="servebot", description="ServeBot task management")
 

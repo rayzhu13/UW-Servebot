@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.08
+
+- Unhandled errors while processing an @mention (LLM/API failures, DB
+  hiccups, etc.) no longer fail silently. `on_message` now catches any
+  exception around the parse step, logs the full traceback, and replies
+  in-channel so a failure is visible instead of leaving the bot looking
+  unresponsive.
+
 ## v1.07
 
 - `/servebot set-reminder-channel` is now **per-channel** instead of
