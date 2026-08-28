@@ -539,8 +539,8 @@ async def help_cmd(interaction: discord.Interaction):
 @servebot_group.command(
     name="set-reminder-channel",
     description=(
-        "Set the channel reminders for tasks created in THIS channel are posted to "
-        "(omit channel to clear the override and use this channel itself)"
+        "Set where reminders for tasks created in THIS channel post "
+        "(omit to clear the override)"
     ),
 )
 @app_commands.checks.has_permissions(manage_guild=True)
