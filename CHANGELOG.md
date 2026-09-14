@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.09
+
+- Fixed a day-of-week resolution bug where a message sent in the evening
+  (guild-local time) could get its due date parsed one day early — e.g.
+  "thursday at 9pm" landing on Wednesday. The reference weekday given to
+  the model was computed from raw UTC time instead of the guild's
+  configured timezone, so once UTC rolled to the next calendar date the
+  model was told the wrong "today." Reference time is now localized to
+  `timezone_name` before being used anywhere in parsing, including the
+  `dateparser` fallback path and naive (offset-less) `due_at_iso` values
+  returned by the model.
+
 ## v1.08
 
 - Unhandled errors while processing an @mention (LLM/API failures, DB

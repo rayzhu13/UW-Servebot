@@ -23,6 +23,7 @@ import datetime as dt
 import difflib
 import json
 import re
+import zoneinfo
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -39,6 +40,17 @@ def _client_instance() -> Anthropic:
     if _client is None:
         _client = Anthropic(api_key=config.anthropic_api_key)
     return _client
+
+
+def _safe_zoneinfo(timezone_name: str) -> dt.tzinfo:
+    """Look up an IANA zone; fall back to UTC (logged) for an invalid/unknown
+    name rather than raising — parsing must not crash a whole message over a
+    bad tz string."""
+    try:
+        return zoneinfo.ZoneInfo(timezone_name)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+        _fallback_log(f"Unknown timezone_name {timezone_name!r}; falling back to UTC")
+        return dt.timezone.utc
 
 
 SYSTEM_PROMPT_TEMPLATE = """You process a message sent to ServeBot, a Discord task-reminder bot. \
@@ -182,9 +194,10 @@ def extract_message(
         )
         for t in open_tasks
     ) or "(none)"
+    local_reference_time = reference_time.astimezone(_safe_zoneinfo(timezone_name))
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        reference_iso=reference_time.isoformat(),
-        reference_weekday=reference_time.strftime("%A"),
+        reference_iso=local_reference_time.isoformat(),
+        reference_weekday=local_reference_time.strftime("%A"),
         timezone_name=timezone_name,
         open_tasks_listing=open_tasks_listing,
     )
@@ -361,7 +374,7 @@ def normalize_due_at(
         try:
             parsed = dt.datetime.fromisoformat(due_at_iso)
             if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=dt.timezone.utc)
+                parsed = parsed.replace(tzinfo=_safe_zoneinfo(timezone_name))
             return parsed.astimezone(dt.timezone.utc)
         except ValueError:
             log_msg = f"Model returned unparseable due_at_iso {due_at_iso!r}, falling back to dateparser"
@@ -370,8 +383,9 @@ def normalize_due_at(
     if not due_at_raw:
         return None
 
+    local_reference_time = reference_time.astimezone(_safe_zoneinfo(timezone_name)).replace(tzinfo=None)
     settings = {
-        "RELATIVE_BASE": reference_time,
+        "RELATIVE_BASE": local_reference_time,
         "PREFER_DATES_FROM": "future",
         "TIMEZONE": timezone_name,
         "RETURN_AS_TIMEZONE_AWARE": True,

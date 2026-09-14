@@ -3,3 +3,4 @@ asyncpg>=0.30
 anthropic>=0.40,<1.0
 dateparser>=1.2,<2.0
 python-dotenv>=1.0,<2.0
+tzdata>=2024.1
