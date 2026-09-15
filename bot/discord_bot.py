@@ -466,7 +466,7 @@ async def before_reminder_loop():
 # ---------------------------------------------------------------------------
 # Slash commands
 # ---------------------------------------------------------------------------
-SERVEBOT_VERSION = "1.09"  # bumped manually, not derived from anything
+SERVEBOT_VERSION = "1.10"  # bumped manually, not derived from anything
 
 servebot_group = app_commands.Group(name="servebot", description="ServeBot task management")
 
