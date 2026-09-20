@@ -339,11 +339,12 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     message = await channel.fetch_message(payload.message_id)
 
     if emoji == CONFIRM_EMOJI:
-        committed, skipped, closed, edited = await _commit_batch(batch)
+        committed, skipped, closed, edited, created_task_ids = await _commit_batch(batch)
         del _pending[payload.message_id]
         parts = []
         if committed:
-            parts.append(f"Scheduled {committed} task(s).")
+            ids = ", ".join(f"#{tid}" for tid in created_task_ids)
+            parts.append(f"Scheduled {committed} task(s): {ids}.")
         if closed:
             parts.append(f"Closed {closed} task(s).")
         if edited:
@@ -358,11 +359,12 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         await message.reply("Discarded — resend or edit your message to try again.")
 
 
-async def _commit_batch(batch: PendingBatch) -> tuple[int, int, int, int]:
+async def _commit_batch(batch: PendingBatch) -> tuple[int, int, int, int, List[int]]:
     settings = await db.get_guild_settings(batch.guild_id)
     channel_override = await db.get_reminder_channel_override(batch.guild_id, batch.channel_id)
     committed = 0
     skipped = 0
+    created_task_ids: List[int] = []
     for task in batch.resolved_tasks:
         if task.assignee_id is None or task.due_at is None:
             skipped += 1
@@ -382,7 +384,7 @@ async def _commit_batch(batch: PendingBatch) -> tuple[int, int, int, int]:
             offsets_minutes=offsets,
             assignee_id_2=task.assignee_id_2,
         )
-        await db.create_task_with_reminders(new_task)
+        created_task_ids.append(await db.create_task_with_reminders(new_task))
         committed += 1
 
     closed = 0
@@ -418,7 +420,7 @@ async def _commit_batch(batch: PendingBatch) -> tuple[int, int, int, int]:
                 await db.replace_reminders(edit.task_id, updated["due_at"], offsets)
         edited += 1
 
-    return committed, skipped, closed, edited
+    return committed, skipped, closed, edited, created_task_ids
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +468,7 @@ async def before_reminder_loop():
 # ---------------------------------------------------------------------------
 # Slash commands
 # ---------------------------------------------------------------------------
-SERVEBOT_VERSION = "1.09"  # bumped manually, not derived from anything
+SERVEBOT_VERSION = "1.10"  # bumped manually, not derived from anything
 
 servebot_group = app_commands.Group(name="servebot", description="ServeBot task management")
 
@@ -607,7 +609,7 @@ async def list_tasks(interaction: discord.Interaction):
         return mentions
 
     lines = [
-        f"{_mentions(t)}: {t['description']} — due <t:{int(t['due_at'].timestamp())}:R>"
+        f"#{t['id']} — {_mentions(t)}: {t['description']} — due <t:{int(t['due_at'].timestamp())}:R>"
         for t in open_tasks
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)

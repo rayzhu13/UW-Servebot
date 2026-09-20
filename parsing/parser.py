@@ -62,8 +62,9 @@ but may optionally be co-assigned to a second person (never more than two).
 For reference, the message was sent at: {reference_iso} ({reference_weekday}), timezone {timezone_name}. \
 Resolve all relative dates ("tomorrow", "friday", "next monday", "end of day") against that moment. \
 "End of day" / "EOD" means 17:00 in the given timezone unless the message says otherwise. If a \
-plain day-of-week is given with no time, use 09:00 that day. "Morning" means 09:00, "afternoon" \
-means 14:00, "evening" means 18:00, unless the message is more specific.
+plain day-of-week or calendar date is given with no time (e.g. "friday", "sept 27th", "9/27"), \
+use 09:00 that day. "Morning" means 09:00, "afternoon" means 14:00, "evening" means 18:00, \
+unless the message is more specific.
 
 Here are the currently open tasks the sender might be referring to as finished/done/closed, or \
 asking to change:
@@ -89,7 +90,12 @@ datetime with UTC offset (e.g. "2026-07-31T21:00:00+00:00"), computed per the ru
 above. If due_at_raw is empty, use an empty string here too.
   - "reminder_offset_minutes": integer or null. Minutes-before-due-time for a \
 reminder, ONLY if the message explicitly mentions reminder timing for THIS task \
-(e.g. "remind her a day ahead" -> 1440). If no reminder timing was mentioned for \
+(e.g. "remind her a day ahead" -> 1440). If the message instead gives an absolute \
+time for the reminder (e.g. "set a reminder for sept 27th at 1pm", "remind me at \
+3pm"), resolve that absolute time the same way you resolve due dates, then convert \
+it to minutes before due_at_iso (round to the nearest minute; use 0 if it isn't \
+strictly before the due time) — always report this field as a plain integer of \
+minutes, never a date/time string. If no reminder timing was mentioned for \
 this task, use null — do not guess or invent one. A separate due-time notification \
 is always sent regardless of this value, so don't use 0 to mean "no reminder."
   - "channel_mention": string or null. The channel name the message asks THIS \
@@ -120,7 +126,9 @@ to reassign the task to someone else; otherwise null.
   - "new_assignee_2_mention": string or null. Lowercase, no @ symbol; only if the message asks \
 to add or change a second, co-assigned person on this task; otherwise null.
   - "new_reminder_offset_minutes": integer or null. Only if the message explicitly asks to \
-change the reminder timing for this task; otherwise null.
+change the reminder timing for this task; otherwise null. If given as an absolute time \
+rather than an offset, convert it to minutes before the task's due time the same way as \
+described for reminder_offset_minutes above — always a plain integer of minutes.
   Only include an edit for a task if the message clearly asks to change something about it — \
 do not guess. If the message doesn't ask to change anything, return an empty array.
 
@@ -129,6 +137,23 @@ Never include any key not listed above. Never wrap any array in another object."
 
 class ParseError(Exception):
     pass
+
+
+def _coerce_reminder_minutes(raw_offset) -> Optional[int]:
+    """Best-effort int coercion for a reminder-offset field.
+
+    The model is asked to always report this as a plain integer of minutes,
+    but if it instead slips in something else (a date/time string, a float
+    with stray text, etc.) that shouldn't torpedo an otherwise-clear task —
+    treat it as "no explicit offset given" (falls back to the guild default)
+    rather than raising ParseError over the whole message."""
+    if raw_offset is None:
+        return None
+    try:
+        return int(raw_offset)
+    except (TypeError, ValueError):
+        _fallback_log(f"Non-integer reminder offset {raw_offset!r}; ignoring it")
+        return None
 
 
 @dataclass
@@ -224,7 +249,6 @@ def extract_message(
     new_tasks = []
     for i, item in enumerate(parsed.get("new_tasks", [])):
         try:
-            raw_offset = item.get("reminder_offset_minutes")
             channel_mention = item.get("channel_mention")
             assignee_2_mention = item.get("assignee_2_mention")
             new_tasks.append(
@@ -233,7 +257,7 @@ def extract_message(
                     description=str(item["description"]).strip(),
                     due_at_raw=str(item.get("due_at_raw", "")).strip(),
                     due_at_iso=str(item.get("due_at_iso", "")).strip(),
-                    reminder_offset_minutes=int(raw_offset) if raw_offset is not None else None,
+                    reminder_offset_minutes=_coerce_reminder_minutes(item.get("reminder_offset_minutes")),
                     channel_mention=str(channel_mention).strip() if channel_mention else None,
                     assignee_2_mention=str(assignee_2_mention).strip().lower() if assignee_2_mention else None,
                 )
@@ -249,7 +273,6 @@ def extract_message(
     edits = []
     for i, item in enumerate(parsed.get("edits", [])):
         try:
-            raw_reminder = item.get("new_reminder_offset_minutes")
             new_assignee_mention = item.get("new_assignee_mention")
             new_assignee_2_mention = item.get("new_assignee_2_mention")
             edits.append(
@@ -261,7 +284,9 @@ def extract_message(
                     new_due_at_iso=item.get("new_due_at_iso") or None,
                     new_assignee_mention=str(new_assignee_mention).strip().lower()
                     if new_assignee_mention else None,
-                    new_reminder_offset_minutes=int(raw_reminder) if raw_reminder is not None else None,
+                    new_reminder_offset_minutes=_coerce_reminder_minutes(
+                        item.get("new_reminder_offset_minutes")
+                    ),
                     new_assignee_2_mention=str(new_assignee_2_mention).strip().lower()
                     if new_assignee_2_mention else None,
                 )
