@@ -615,6 +615,19 @@ async def list_tasks(interaction: discord.Interaction):
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
+@servebot_group.command(name="my-tasks", description="List your open tasks in this server")
+async def my_tasks(interaction: discord.Interaction):
+    open_tasks = await db.list_tasks_for_user(interaction.guild_id, interaction.user.id)
+    if not open_tasks:
+        await interaction.response.send_message("You have no open tasks in this server.", ephemeral=True)
+        return
+    lines = [
+        f"#{t['id']} — {t['description']} — due <t:{int(t['due_at'].timestamp())}:R> — <#{t['channel_id']}>"
+        for t in open_tasks
+    ]
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
 @servebot_group.command(name="cancel-task", description="Cancel a task by id")
 @app_commands.checks.has_permissions(manage_guild=True)
 async def cancel_task_cmd(interaction: discord.Interaction, task_id: int):
