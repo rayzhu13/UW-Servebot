@@ -228,6 +228,17 @@ async def list_open_tasks(guild_id: int, channel_id: Optional[int] = None) -> Li
     return [dict(row) for row in rows]
 
 
+async def list_tasks_for_user(guild_id: int, user_id: int) -> List[dict]:
+    pool = _get_pool()
+    rows = await pool.fetch(
+        "SELECT * FROM tasks WHERE guild_id = $1 AND status = 'pending' "
+        "AND (assignee_id = $2 OR assignee_id_2 = $2) ORDER BY due_at ASC",
+        guild_id,
+        user_id,
+    )
+    return [dict(row) for row in rows]
+
+
 async def cancel_task(task_id: int, guild_id: int) -> bool:
     pool = _get_pool()
     result = await pool.execute(
