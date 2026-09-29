@@ -97,6 +97,10 @@ Both always ping the assignee directly.
 `/servebot list` — lists open (not yet done/cancelled) tasks in the
 current channel.
 
+`/servebot summarize <hours>` — posts (only to you) an AI-generated
+summary of the messages in the current channel from the last 1–168 hours.
+Reads at most the 500 most recent messages in that window.
+
 ## Server settings (require Manage Server)
 
 - `/servebot set-reminder-channel [channel]` — run this **in the channel

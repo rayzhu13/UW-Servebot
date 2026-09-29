@@ -419,6 +419,33 @@ def normalize_due_at(
     return dateparser.parse(due_at_raw, settings=settings)
 
 
+SUMMARY_SYSTEM_PROMPT = """You summarize a Discord channel's recent conversation for someone \
+catching up. You'll be given a transcript, one message per line, formatted as \
+"[HH:MM] author: text". Write a concise summary (a few short bullet points, under 300 words) \
+covering the main topics discussed, any decisions made, and any action items or open questions \
+— attributing them to people by name where relevant. Do not invent anything not in the \
+transcript. Return plain text only, no preamble."""
+
+
+def summarize_messages(transcript: str, hours: int) -> str:
+    """Summarize a channel transcript (already formatted by the caller) via
+    the Anthropic API. Raises ParseError if the model returns nothing."""
+    client = _client_instance()
+    response = client.messages.create(
+        model=config.anthropic_model,
+        max_tokens=1000,
+        system=SUMMARY_SYSTEM_PROMPT,
+        messages=[{
+            "role": "user",
+            "content": f"Transcript of the last {hours} hour(s):\n\n{transcript}",
+        }],
+    )
+    text = "".join(block.text for block in response.content if block.type == "text").strip()
+    if not text:
+        raise ParseError("Model returned an empty summary")
+    return text
+
+
 def _fallback_log(message: str) -> None:
     import logging
     logging.getLogger("servebot.parsing").warning(message)

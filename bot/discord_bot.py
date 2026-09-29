@@ -34,8 +34,10 @@ Design choices worth flagging (see plan §12 open questions):
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
+import zoneinfo
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -45,7 +47,7 @@ from discord.ext import commands, tasks
 
 from config import config
 from db import db
-from parsing.parser import ParseError, ResolvedEdit, ResolvedTask, parse_and_normalize
+from parsing.parser import ParseError, ResolvedEdit, ResolvedTask, parse_and_normalize, summarize_messages
 
 log = logging.getLogger("servebot")
 
@@ -523,7 +525,10 @@ async def help_cmd(interaction: discord.Interaction):
     )
     embed.add_field(
         name="Checking on tasks",
-        value="/servebot list — see open tasks in this channel",
+        value=(
+            "/servebot list — see open tasks in this channel\n"
+            "/servebot summarize <hours> — summarize this channel's recent messages"
+        ),
         inline=False,
     )
     embed.add_field(
@@ -626,6 +631,76 @@ async def my_tasks(interaction: discord.Interaction):
         for t in open_tasks
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+SUMMARY_MAX_MESSAGES = 500  # cap on how much history one summary will read
+SUMMARY_MAX_TRANSCRIPT_CHARS = 60_000  # keep the prompt bounded; oldest lines dropped first
+
+
+@servebot_group.command(name="summarize", description="Summarize messages in this channel from the last N hours")
+@app_commands.describe(hours="How many hours back to summarize (1–168)")
+async def summarize_cmd(interaction: discord.Interaction, hours: app_commands.Range[int, 1, 168]):
+    channel = interaction.channel
+    if channel is None or not hasattr(channel, "history"):
+        await interaction.response.send_message("I can't read messages in this channel.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    try:
+        settings = await db.get_guild_settings(interaction.guild_id)
+        tz = zoneinfo.ZoneInfo(settings.timezone_name)
+    except Exception:
+        log.exception("Couldn't load timezone for guild %s; using UTC", interaction.guild_id)
+        tz = dt.timezone.utc
+
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
+    lines: List[str] = []
+    try:
+        async for msg in channel.history(after=cutoff, limit=SUMMARY_MAX_MESSAGES, oldest_first=False):
+            text = msg.clean_content.strip()
+            if msg.attachments:
+                text = f"{text} [attachment]".strip()
+            if not text:
+                continue
+            stamp = msg.created_at.astimezone(tz).strftime("%H:%M")
+            lines.append(f"[{stamp}] {msg.author.display_name}: {text}")
+    except discord.Forbidden:
+        await interaction.followup.send("I don't have permission to read this channel's history.", ephemeral=True)
+        return
+
+    if not lines:
+        await interaction.followup.send(f"No messages in this channel in the last {hours} hour(s).", ephemeral=True)
+        return
+
+    # history() was read newest-first so the message cap keeps the most recent
+    # messages; trim the oldest if still too long, then put back in order.
+    kept: List[str] = []
+    total = 0
+    for line in lines:
+        total += len(line) + 1
+        if total > SUMMARY_MAX_TRANSCRIPT_CHARS:
+            break
+        kept.append(line)
+    kept.reverse()
+    truncated = len(kept) < len(lines) or len(lines) >= SUMMARY_MAX_MESSAGES
+
+    try:
+        summary = await asyncio.to_thread(summarize_messages, "\n".join(kept), hours)
+    except Exception:
+        log.exception("Summarize failed in guild %s", interaction.guild_id)
+        await interaction.followup.send("Something went wrong generating the summary — try again in a moment.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title=f"Last {hours} hour(s) in #{getattr(channel, 'name', 'this channel')}",
+        description=summary[:4096],
+        color=discord.Color.blurple(),
+    )
+    footer = f"Based on {len(kept)} message(s)"
+    if truncated:
+        footer += " — only the most recent messages were included"
+    embed.set_footer(text=footer)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @servebot_group.command(name="cancel-task", description="Cancel a task by id")
